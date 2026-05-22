@@ -10,12 +10,6 @@ export class BackupPostgres extends createBackupNodeClass({
   codexLabel: "PostgreSQL",
   properties: [
     {
-      displayName: "Compress (gzip)",
-      name: "compress",
-      type: "boolean",
-      default: true,
-    },
-    {
       displayName: "Include Schema",
       name: "includeSchema",
       type: "boolean",

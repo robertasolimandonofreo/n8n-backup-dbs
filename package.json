@@ -1,69 +1,72 @@
 {
     "name": "n8n-nodes-backup-dbs-rsd",
-    "version": "0.3.2",
+    "version": "0.3.3",
     "description": "n8n community node to backup RabbitMQ, MongoDB, PostgreSQL and Qdrant directly to Amazon S3",
     "keywords": [
-      "n8n-community-node-package",
-      "backup",
-      "mongodb",
-      "postgresql",
-      "rabbitmq",
-      "qdrant",
-      "s3"
+        "n8n-community-node-package",
+        "backup",
+        "mongodb",
+        "postgresql",
+        "rabbitmq",
+        "qdrant",
+        "s3"
     ],
     "license": "MIT",
     "homepage": "https://github.com/robertasolimandonofreo/n8n-backup-dbs",
     "author": {
-      "name": "roberta.soliman"
+        "name": "roberta.soliman"
     },
     "repository": {
-      "type": "git",
-      "url": "https://github.com/robertasolimandonofreo/n8n-backup-dbs.git"
+        "type": "git",
+        "url": "https://github.com/robertasolimandonofreo/n8n-backup-dbs.git"
     },
     "scripts": {
-      "clean": "rm -rf dist",
-      "build": "npm run clean && tsc && gulp build:icons",
-      "dev": "tsc --watch",
-      "format": "prettier nodes credentials --write",
-      "prepublishOnly": "npm run build"
+        "clean": "rm -rf dist",
+        "build": "npm run clean && tsc && gulp build:icons",
+        "dev": "tsc --watch",
+        "format": "prettier nodes credentials --write",
+        "prepublishOnly": "npm run build"
     },
     "files": [
-      "dist"
+        "dist"
     ],
     "n8n": {
-      "n8nNodesApiVersion": 1,
-      "credentials": [
-        "dist/credentials/MongoDbBackupApi.credentials.js",
-        "dist/credentials/PostgresBackupApi.credentials.js",
-        "dist/credentials/QdrantBackupApi.credentials.js",
-        "dist/credentials/RabbitMqBackupApi.credentials.js",
-        "dist/credentials/S3BackupApi.credentials.js"
-      ],
-      "nodes": [
-        "dist/nodes/BackupMongoDb/BackupMongoDb.node.js",
-        "dist/nodes/BackupPostgres/BackupPostgres.node.js",
-        "dist/nodes/BackupQdrant/BackupQdrant.node.js",
-        "dist/nodes/BackupRabbitMq/BackupRabbitMq.node.js"
-      ]
+        "n8nNodesApiVersion": 1,
+        "credentials": [
+            "dist/credentials/MongoDbBackupApi.credentials.js",
+            "dist/credentials/PostgresBackupApi.credentials.js",
+            "dist/credentials/QdrantBackupApi.credentials.js",
+            "dist/credentials/RabbitMqBackupApi.credentials.js",
+            "dist/credentials/S3BackupApi.credentials.js"
+        ],
+        "nodes": [
+            "dist/nodes/BackupMongoDb/BackupMongoDb.node.js",
+            "dist/nodes/BackupPostgres/BackupPostgres.node.js",
+            "dist/nodes/BackupQdrant/BackupQdrant.node.js",
+            "dist/nodes/BackupRabbitMq/BackupRabbitMq.node.js"
+        ]
     },
     "engines": {
-      "node": ">=20.15.0"
+        "node": ">=20.15.0"
     },
     "peerDependencies": {
-      "n8n-workflow": "*"
+        "n8n-workflow": "*"
     },
     "devDependencies": {
-      "@types/node": "^20.0.0",
-      "@types/pg": "^8.11.6",
-      "gulp": "^4.0.2",
-      "n8n-workflow": "~2.11.1",
-      "prettier": "^2.7.1",
-      "typescript": "^5.7.0"
+        "@types/lz4": "^0.6.4",
+        "@types/node": "^20.0.0",
+        "@types/pg": "^8.11.6",
+        "gulp": "^4.0.2",
+        "n8n-workflow": "~2.11.1",
+        "prettier": "^2.7.1",
+        "typescript": "^5.7.0"
     },
     "dependencies": {
-      "@aws-sdk/client-s3": "^3.0.0",
-      "@aws-sdk/lib-storage": "^3.0.0",
-      "mongodb": "^6.0.0",
-      "pg": "^8.11.0"
+        "@aws-sdk/client-s3": "^3.0.0",
+        "@aws-sdk/lib-storage": "^3.0.0",
+        "lz4": "^0.6.5",
+        "lzma": "^2.3.2",
+        "mongodb": "^6.0.0",
+        "pg": "^8.11.0"
     }
-  }
+}

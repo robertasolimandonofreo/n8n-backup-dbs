@@ -8,12 +8,5 @@ export class BackupRabbitMq extends createBackupNodeClass({
   description: "Backup RabbitMQ vhost definitions to Amazon S3",
   dbCredentialType: "rabbitMqBackupApi",
   codexLabel: "RabbitMQ",
-  properties: [
-    {
-      displayName: "Compress (gzip)",
-      name: "compress",
-      type: "boolean",
-      default: true,
-    },
-  ],
+  properties: [],
 }) {}

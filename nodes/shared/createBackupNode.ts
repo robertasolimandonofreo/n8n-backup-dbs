@@ -7,6 +7,8 @@ import type {
   INodeTypeDescription,
 } from "n8n-workflow";
 import { NodeOperationError } from "n8n-workflow";
+import { BACKUP_COMPRESSION_OPTIONS } from "./backupCompression";
+import { summarizeBackupResult } from "./backupSummary";
 import {
   backupMongoDB,
   backupPostgreSQL,
@@ -79,6 +81,18 @@ export function createBackupNodeClass(config: {
         description:
           "File name uploaded to S3 (without folder path). Defaults to today.",
       },
+      {
+        displayName: "Compression",
+        name: "compression",
+        type: "options",
+        options: BACKUP_COMPRESSION_OPTIONS.map((o) => ({
+          name: o.name,
+          value: o.value,
+        })),
+        default: "lz4",
+        description:
+          "LZ4 is fastest (StackGres-style). Gzip/Brotli/LZMA trade speed for smaller files.",
+      },
       ...config.properties,
     ],
   };
@@ -102,7 +116,7 @@ export function createBackupNodeClass(config: {
               i,
               todayDate(),
             ) as string,
-            compress: this.getNodeParameter("compress", i, true),
+            compression: this.getNodeParameter("compression", i, "lz4"),
             includeSchema: this.getNodeParameter("includeSchema", i, true),
             databaseScope: this.getNodeParameter("databaseScope", i, "all"),
             databaseName: this.getNodeParameter("databaseName", i, ""),
@@ -111,7 +125,8 @@ export function createBackupNodeClass(config: {
             waitSeconds: this.getNodeParameter("waitSeconds", i, 30),
           };
 
-          returnData.push(await run(dbCreds, options, s3Creds));
+          const result = await run(dbCreds, options, s3Creds);
+          returnData.push(summarizeBackupResult(result));
         } catch (error) {
           if (this.continueOnFail()) {
             returnData.push({

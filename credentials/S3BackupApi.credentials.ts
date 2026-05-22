@@ -47,5 +47,20 @@ export class S3BackupApi implements ICredentialType {
       type: "string",
       default: "backups/",
     },
+    {
+      displayName: "Storage Class",
+      name: "storageClass",
+      type: "options",
+      options: [
+        { name: "Standard", value: "STANDARD" },
+        { name: "Standard-IA", value: "STANDARD_IA" },
+        { name: "Glacier Instant Retrieval", value: "GLACIER_IR" },
+        { name: "Glacier Flexible Retrieval", value: "GLACIER" },
+        { name: "Deep Archive", value: "DEEP_ARCHIVE" },
+        { name: "Intelligent-Tiering", value: "INTELLIGENT_TIERING" },
+      ],
+      default: "STANDARD_IA",
+      description: "S3 storage class for backup objects (default: Standard-IA)",
+    },
   ];
 }

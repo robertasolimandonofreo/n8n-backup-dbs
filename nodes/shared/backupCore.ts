@@ -1,4 +1,12 @@
 import type { IDataObject } from "n8n-workflow";
+import {
+  backupContentType,
+  backupDataExtension,
+  compressBuffer,
+  jsonToBuffer,
+  resolveCompression,
+} from "./backupCompression";
+import { ROW_BATCH_SIZE } from "./backupSummary";
 
 export async function uploadToS3(
   s3Creds: IDataObject,
@@ -7,6 +15,7 @@ export async function uploadToS3(
   contentType = "application/octet-stream"
 ): Promise<string> {
   const { S3Client, PutObjectCommand } = await import("@aws-sdk/client-s3");
+  type S3StorageClass = import("@aws-sdk/client-s3").StorageClass;
 
   const client = new S3Client({
     region: s3Creds.region as string,
@@ -21,6 +30,8 @@ export async function uploadToS3(
 
   const prefix = ((s3Creds.keyPrefix as string) || "").replace(/\/$/, "");
   const fullKey = prefix ? `${prefix}/${key}` : key;
+  const storageClass: S3StorageClass =
+    ((s3Creds.storageClass as string) || "STANDARD_IA") as S3StorageClass;
 
   await client.send(
     new PutObjectCommand({
@@ -28,18 +39,11 @@ export async function uploadToS3(
       Key: fullKey,
       Body: body,
       ContentType: contentType,
+      StorageClass: storageClass,
     })
   );
 
   return `s3://${s3Creds.bucket as string}/${fullKey}`;
-}
-
-export function gzipAsync(buf: Buffer): Promise<Buffer> {
-  return new Promise((resolve, reject) => {
-    import("zlib").then(({ gzip }) =>
-      gzip(buf, (err, result) => (err ? reject(err) : resolve(result)))
-    );
-  });
 }
 
 export function timestamp(): string {
@@ -54,9 +58,8 @@ export function sanitizeBackupFileName(name: string): string {
   return name.replace(/[^a-zA-Z0-9._-]/g, "_").replace(/^\.+/, "");
 }
 
-export function buildBackupFileName(
+export function buildBackupBaseName(
   options: IDataObject,
-  extension: string,
   suffix?: string
 ): string {
   const custom = sanitizeBackupFileName(
@@ -64,11 +67,18 @@ export function buildBackupFileName(
   );
 
   if (!custom) {
-    return `${todayDate()}${suffix ? `_${suffix}` : ""}.${extension}`;
+    return `${todayDate()}${suffix ? `_${suffix}` : ""}`;
   }
 
-  const base = suffix ? `${custom}_${suffix}` : custom;
-  return `${base}.${extension}`;
+  return suffix ? `${custom}_${suffix}` : custom;
+}
+
+export function buildBackupFileName(
+  options: IDataObject,
+  extension: string,
+  suffix?: string
+): string {
+  return `${buildBackupBaseName(options, suffix)}.${extension}`;
 }
 
 export function requireSpecificName(scope: string, name: string, label: string): string {
@@ -97,7 +107,7 @@ export async function backupMongoDB(
 
   try {
     await client.connect();
-    const compress = (options.compress as boolean) ?? true;
+    const compression = resolveCompression(options);
     const scope = (options.databaseScope as string) || "all";
     const specificDb = requireSpecificName(
       scope,
@@ -117,40 +127,69 @@ export async function backupMongoDB(
     for (const dbName of dbNames) {
       const db = client.db(dbName);
       const collections = await db.listCollections().toArray();
-      const dump: IDataObject = {
-        database: dbName,
-        exportedAt: new Date().toISOString(),
-        collections: {},
-      };
-
-      for (const col of collections) {
-        const docs = await db.collection(col.name).find({}).toArray();
-        (dump.collections as IDataObject)[col.name] = docs;
-      }
-
-      let body: Buffer = Buffer.from(JSON.stringify(dump));
-      if (compress) body = await gzipAsync(body);
-
-      const ext = compress ? "json.gz" : "json";
-      const fileName = buildBackupFileName(
+      const baseName = buildBackupBaseName(
         options,
-        ext,
         dbNames.length > 1 ? dbName : undefined
       );
-      const key = `mongodb/${dbName}/${fileName}`;
-      const s3Uri = await uploadToS3(
-        s3Creds,
-        key,
-        body,
-        compress ? "application/gzip" : "application/json"
-      );
+      const ext = backupDataExtension(compression);
+      const exportedAt = new Date().toISOString();
+      const uploads: IDataObject[] = [];
+
+      for (const col of collections) {
+        const cursor = db.collection(col.name).find({});
+        let batch: unknown[] = [];
+        let part = 0;
+
+        const flushBatch = async (rows: unknown[], partIndex: number) => {
+          const body = await jsonToBuffer(
+            {
+              database: dbName,
+              collection: col.name,
+              exportedAt,
+              part: partIndex,
+              documents: rows,
+            },
+            compression
+          );
+          const fileStem =
+            partIndex > 1
+              ? `${col.name}_part${String(partIndex).padStart(4, "0")}`
+              : col.name;
+          const key = `mongodb/${dbName}/${baseName}/${fileStem}.${ext}`;
+          const s3Uri = await uploadToS3(
+            s3Creds,
+            key,
+            body,
+            backupContentType(compression)
+          );
+          uploads.push({
+            collection: col.name,
+            part: partIndex,
+            s3Uri,
+            sizeBytes: body.byteLength,
+            rowCount: rows.length,
+          });
+        };
+
+        for await (const doc of cursor) {
+          batch.push(doc);
+          if (batch.length >= ROW_BATCH_SIZE) {
+            part += 1;
+            await flushBatch(batch, part);
+            batch = [];
+          }
+        }
+
+        part += 1;
+        await flushBatch(batch, part);
+      }
 
       results.push({
         database: dbName,
         collections: collections.length,
-        s3Uri,
-        compressed: compress,
-        sizeBytes: body.byteLength,
+        prefix: `mongodb/${dbName}/${baseName}/`,
+        uploads,
+        compression,
       });
     }
 
@@ -196,13 +235,12 @@ export async function backupPostgreSQLDatabase(
   await client.connect();
 
   try {
-    const compress = (options.compress as boolean) ?? true;
+    const compression = resolveCompression(options);
     const includeSchema = (options.includeSchema as boolean) ?? true;
-    const dump: IDataObject = {
-      database: databaseName,
-      exportedAt: new Date().toISOString(),
-      tables: {},
-    };
+    const exportedAt = new Date().toISOString();
+    const baseName = buildBackupBaseName(options, fileSuffix);
+    const ext = backupDataExtension(compression);
+    const uploads: IDataObject[] = [];
 
     if (includeSchema) {
       const res = await client.query(`
@@ -221,36 +259,82 @@ export async function backupPostgreSQLDatabase(
           default: row.column_default,
         });
       }
-      dump.schema = schema;
+
+      const schemaBody = await jsonToBuffer(
+        { database: databaseName, exportedAt, schema },
+        compression
+      );
+      const schemaKey = `postgresql/${databaseName}/${baseName}/_schema.${ext}`;
+      const schemaUri = await uploadToS3(
+        s3Creds,
+        schemaKey,
+        schemaBody,
+        backupContentType(compression)
+      );
+      uploads.push({
+        table: "_schema",
+        s3Uri: schemaUri,
+        sizeBytes: schemaBody.byteLength,
+      });
     }
 
     const tablesRes = await client.query(
       `SELECT tablename FROM pg_tables WHERE schemaname = 'public'`
     );
+
     for (const { tablename } of tablesRes.rows) {
-      const dataRes = await client.query(`SELECT * FROM "${tablename}"`);
-      (dump.tables as IDataObject)[tablename] = dataRes.rows;
+      let offset = 0;
+      let part = 0;
+
+      while (true) {
+        const dataRes = await client.query(
+          `SELECT * FROM "${tablename}" LIMIT $1 OFFSET $2`,
+          [ROW_BATCH_SIZE, offset]
+        );
+
+        if (dataRes.rows.length === 0 && part > 0) break;
+
+        part += 1;
+        const body = await jsonToBuffer(
+          {
+            database: databaseName,
+            table: tablename,
+            exportedAt,
+            part,
+            rows: dataRes.rows,
+          },
+          compression
+        );
+        const fileStem =
+          part > 1
+            ? `${tablename}_part${String(part).padStart(4, "0")}`
+            : tablename;
+        const key = `postgresql/${databaseName}/${baseName}/${fileStem}.${ext}`;
+        const s3Uri = await uploadToS3(
+          s3Creds,
+          key,
+          body,
+          backupContentType(compression)
+        );
+        uploads.push({
+          table: tablename,
+          part,
+          s3Uri,
+          sizeBytes: body.byteLength,
+          rowCount: dataRes.rows.length,
+        });
+
+        if (dataRes.rows.length < ROW_BATCH_SIZE) break;
+        offset += dataRes.rows.length;
+      }
     }
-
-    let body: Buffer = Buffer.from(JSON.stringify(dump));
-    if (compress) body = await gzipAsync(body);
-
-    const ext = compress ? "json.gz" : "json";
-    const fileName = buildBackupFileName(options, ext, fileSuffix);
-    const key = `postgresql/${databaseName}/${fileName}`;
-    const s3Uri = await uploadToS3(
-      s3Creds,
-      key,
-      body,
-      compress ? "application/gzip" : "application/json"
-    );
 
     return {
       database: databaseName,
       tables: tablesRes.rows.length,
-      s3Uri,
-      compressed: compress,
-      sizeBytes: body.byteLength,
+      prefix: `postgresql/${databaseName}/${baseName}/`,
+      uploads,
+      compression,
     };
   } finally {
     await client.end();
@@ -367,7 +451,7 @@ export async function backupRabbitMQ(
     Authorization: `Basic ${auth}`,
     "Content-Type": "application/json",
   };
-  const compress = (options.compress as boolean) ?? true;
+  const compression = resolveCompression(options);
 
   const definitions = await httpGet(
     `${baseUrl}/api/definitions/${vhost}`,
@@ -380,18 +464,16 @@ export async function backupRabbitMQ(
     definitions,
   };
 
-  let body: Buffer = Buffer.from(JSON.stringify(dump));
-  if (compress) body = await gzipAsync(body);
-
   const safeVhost = (creds.vhost as string).replace(/\//g, "_") || "default";
-  const ext = compress ? "json.gz" : "json";
+  const ext = backupDataExtension(compression);
   const fileName = buildBackupFileName(options, ext);
+  const body = await jsonToBuffer(dump, compression);
   const key = `rabbitmq/${safeVhost}/${fileName}`;
   const s3Uri = await uploadToS3(
     s3Creds,
     key,
     body,
-    compress ? "application/gzip" : "application/json"
+    backupContentType(compression)
   );
 
   return {
@@ -400,7 +482,7 @@ export async function backupRabbitMQ(
     exportType: "definitions",
     vhost: creds.vhost,
     s3Uri,
-    compressed: compress,
+    compression,
     sizeBytes: body.byteLength,
   };
 }
@@ -452,6 +534,7 @@ export async function backupQdrant(
   const baseUrl = (creds.url as string).replace(/\/$/, "");
   const apiKey = creds.apiKey as string | undefined;
   const waitMs = ((options.waitSeconds as number) ?? 30) * 1000;
+  const compression = resolveCompression(options);
   const scope = (options.collectionScope as string) || "all";
   const specificCollection = requireSpecificName(
     scope,
@@ -501,25 +584,31 @@ export async function backupQdrant(
       "GET",
       apiKey
     );
-    const snapshotBuf = Buffer.from(JSON.stringify(dlRes.data));
+    const snapshotRaw = Buffer.from(JSON.stringify(dlRes.data));
+    const snapshotBody = await compressBuffer(snapshotRaw, compression);
+    const snapshotExt =
+      compression === "none"
+        ? "snapshot"
+        : `snapshot.${backupDataExtension(compression)}`;
     const fileName = buildBackupFileName(
       options,
-      "snapshot",
+      snapshotExt,
       targets.length > 1 ? collection : undefined
     );
     const key = `qdrant/${collection}/${fileName}`;
     const s3Uri = await uploadToS3(
       s3Creds,
       key,
-      snapshotBuf,
-      "application/octet-stream"
+      snapshotBody,
+      backupContentType(compression)
     );
 
     results.push({
       collection,
       snapshotName,
       s3Uri,
-      sizeBytes: snapshotBuf.byteLength,
+      compression,
+      sizeBytes: snapshotBody.byteLength,
     });
   }
 
@@ -527,6 +616,7 @@ export async function backupQdrant(
     success: true,
     engine: "qdrant",
     scope,
+    compression,
     collections: targets.length,
     backups: results,
   };

@@ -10,12 +10,6 @@ export class BackupMongoDb extends createBackupNodeClass({
   codexLabel: "MongoDB",
   properties: [
     {
-      displayName: "Compress (gzip)",
-      name: "compress",
-      type: "boolean",
-      default: true,
-    },
-    {
       displayName: "Database",
       name: "databaseScope",
       type: "options",
