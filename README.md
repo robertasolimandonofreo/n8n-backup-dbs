@@ -1,104 +1,48 @@
 # n8n-nodes-backup-dbs
 
-n8n community node to backup **RabbitMQ**, **MongoDB**, **PostgreSQL** and **Qdrant** directly to **Amazon S3** using native protocols — no shell commands required.
+n8n community node to backup **RabbitMQ**, **MongoDB**, **PostgreSQL** and **Qdrant** directly to **Amazon S3**.
 
-## Installation
+## Nodes (separate in the panel)
 
-Settings → Community Nodes → Install → `n8n-nodes-backup-dbs`
+| Node | Description |
+|---|---|
+| **Backup MongoDB** | MongoDB → S3 |
+| **Backup PostgreSQL** | PostgreSQL → S3 |
+| **Backup Qdrant** | Qdrant → S3 |
+| **Backup RabbitMQ** | RabbitMQ → S3 |
 
-## How it works
-
-| Engine | Method | Output |
-|---|---|---|
-| MongoDB | Native driver — iterates all collections | JSON (optionally gzipped) |
-| PostgreSQL | Wire protocol — exports schema + all public tables | JSON (optionally gzipped) |
-| RabbitMQ | Management HTTP API — exports vhost definitions | JSON (optionally gzipped) |
-| Qdrant | REST API — triggers snapshot and downloads it | Binary snapshot |
-
-All backups are streamed directly to S3 — nothing is written to disk on the n8n server.
+Search **Backup DBs** in the node panel to see all four under category **Backup DBs**.
 
 ## Credentials
 
-### Backup DBs (one credential)
-
-**Application** options: MongoDB, PostgreSQL, Qdrant, RabbitMQ or **Amazon S3**.
-
-For database backups, pick your database in Application, fill connection fields, then scroll to the **Amazon S3** section (Access Key, bucket, region, etc.) in the same credential.
-
-| Application | Connection fields |
+| Credential | Used for |
 |---|---|
-| MongoDB | URI, TLS |
-| PostgreSQL | Host, port, database, user, password, SSL |
-| Qdrant | Host URL, API key |
-| RabbitMQ | Management URL, user, password, vhost |
-| Amazon S3 | S3 fields only (when configuring S3 separately) |
+| MongoDB Backup | **Backup MongoDB** node |
+| PostgreSQL Backup | **Backup PostgreSQL** node |
+| Qdrant Backup | **Backup Qdrant** node |
+| RabbitMQ Backup | **Backup RabbitMQ** node |
+| **S3 Backup Storage** | All backup nodes (destination) |
 
-## Node Options
+Each backup node has **Database** + **Amazon S3** credential slots.
 
-| Option | Engines | Description |
-|---|---|---|
-| Backup File Name | All | S3 object file name (empty = timestamp) |
-| Database | MongoDB, PostgreSQL | **All Databases** or **Specific Database** + name |
-| Collection | Qdrant | **All Collections** or **Specific Collection** + name |
-| Export | RabbitMQ | Full **definitions** of the virtual host (queues, exchanges, bindings, etc.) |
-| Compress (gzip) | MongoDB, PostgreSQL, RabbitMQ | Gzip before upload |
-| Include Schema | PostgreSQL | Column definitions alongside table data |
-| Snapshot Wait (seconds) | Qdrant | Wait time for snapshot build (default 30s) |
+## Node options
 
-## S3 Key Structure
+| Option | Engines |
+|---|---|
+| Backup File Name | All (default: today's date) |
+| Database scope | MongoDB, PostgreSQL |
+| Collection scope | Qdrant |
+| Compress (gzip) | MongoDB, PostgreSQL, RabbitMQ |
 
-```
-{keyPrefix}/
-  mongodb/{database}/{timestamp}.json.gz
-  postgresql/{database}/{timestamp}.json.gz
-  rabbitmq/{vhost}/{timestamp}.json.gz
-  qdrant/{collection}/{timestamp}.snapshot
-```
+## Installation
 
-## IAM Policy for S3
+Settings → Community Nodes → Install → `n8n-nodes-backup-dbs-rsd`
 
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [{
-    "Effect": "Allow",
-    "Action": ["s3:PutObject"],
-    "Resource": "arn:aws:s3:::YOUR-BUCKET/backups/*"
-  }]
-}
-```
+## Local development
 
-## Output
-
-Each execution returns:
-
-```json
-{
-  "success": true,
-  "engine": "postgresql",
-  "database": "mydb",
-  "tables": 12,
-  "s3Uri": "s3://my-bucket/backups/postgresql/mydb/2024-01-15T10-00-00-000Z.json.gz",
-  "compressed": true,
-  "sizeBytes": 48320
-}
-```
-
-## Example Workflow
-
-**Daily backup at 02:00 UTC:**
-
-```
-Cron (0 2 * * *)  →  Backup DBs (PostgreSQL)  →  IF success = false  →  Send Alert
-```
-
-**Backup all 4 engines in sequence:**
-
-```
-Cron  →  Backup DBs (MongoDB)
-      →  Backup DBs (PostgreSQL)
-      →  Backup DBs (RabbitMQ)
-      →  Backup DBs (Qdrant)
-      →  Merge results
-      →  Notify Slack
+```bash
+npm install
+npm run build
+export N8N_CUSTOM_EXTENSIONS=/path/to/n8n-backup-dbs
+n8n start
 ```

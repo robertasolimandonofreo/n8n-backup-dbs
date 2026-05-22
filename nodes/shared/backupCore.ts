@@ -1,17 +1,6 @@
-import type {
-  IDataObject,
-  IExecuteFunctions,
-  INodeExecutionData,
-  INodeType,
-  INodeTypeDescription,
-} from "n8n-workflow";
-import { NodeOperationError } from "n8n-workflow";
+import type { IDataObject } from "n8n-workflow";
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Helpers
-// ─────────────────────────────────────────────────────────────────────────────
-
-async function uploadToS3(
+export async function uploadToS3(
   s3Creds: IDataObject,
   key: string,
   body: Buffer | string,
@@ -45,7 +34,7 @@ async function uploadToS3(
   return `s3://${s3Creds.bucket as string}/${fullKey}`;
 }
 
-function gzipAsync(buf: Buffer): Promise<Buffer> {
+export function gzipAsync(buf: Buffer): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     import("zlib").then(({ gzip }) =>
       gzip(buf, (err, result) => (err ? reject(err) : resolve(result)))
@@ -53,15 +42,19 @@ function gzipAsync(buf: Buffer): Promise<Buffer> {
   });
 }
 
-function timestamp(): string {
+export function timestamp(): string {
   return new Date().toISOString().replace(/[:.]/g, "-");
 }
 
-function sanitizeBackupFileName(name: string): string {
+export function todayDate(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+export function sanitizeBackupFileName(name: string): string {
   return name.replace(/[^a-zA-Z0-9._-]/g, "_").replace(/^\.+/, "");
 }
 
-function buildBackupFileName(
+export function buildBackupFileName(
   options: IDataObject,
   extension: string,
   suffix?: string
@@ -71,61 +64,14 @@ function buildBackupFileName(
   );
 
   if (!custom) {
-    return `${timestamp()}${suffix ? `_${suffix}` : ""}.${extension}`;
+    return `${todayDate()}${suffix ? `_${suffix}` : ""}.${extension}`;
   }
 
   const base = suffix ? `${custom}_${suffix}` : custom;
   return `${base}.${extension}`;
 }
 
-function extractDbCreds(raw: IDataObject, engine: string): IDataObject {
-  const app = raw.app as string;
-  if (app && app !== engine && app !== "s3") {
-    throw new Error(
-      `Credential Application is ${app} but node Engine is ${engine}`,
-    );
-  }
-
-  if (engine === "mongodb") {
-    return { uri: raw.uri, tls: raw.tls };
-  }
-  if (engine === "postgresql") {
-    return {
-      host: raw.host,
-      port: raw.port,
-      database: raw.database,
-      user: raw.user,
-      password: raw.password,
-      ssl: raw.ssl,
-    };
-  }
-  if (engine === "qdrant") {
-    return { url: raw.url, apiKey: raw.apiKey, skipVerify: raw.skipVerify };
-  }
-  if (engine === "rabbitmq") {
-    return {
-      url: raw.url,
-      username: raw.username,
-      password: raw.password,
-      vhost: raw.vhost,
-    };
-  }
-
-  throw new Error(`Unsupported engine: ${engine}`);
-}
-
-function extractS3Creds(raw: IDataObject): IDataObject {
-  return {
-    accessKeyId: raw.accessKeyId,
-    secretAccessKey: raw.secretAccessKey,
-    sessionToken: raw.sessionToken,
-    region: raw.region,
-    bucket: raw.bucket,
-    keyPrefix: raw.keyPrefix,
-  };
-}
-
-function requireSpecificName(scope: string, name: string, label: string): string {
+export function requireSpecificName(scope: string, name: string, label: string): string {
   if (scope !== "specific") return "";
   const trimmed = name.trim();
   if (!trimmed) {
@@ -138,7 +84,7 @@ function requireSpecificName(scope: string, name: string, label: string): string
 // MongoDB
 // ─────────────────────────────────────────────────────────────────────────────
 
-async function backupMongoDB(
+export async function backupMongoDB(
   creds: IDataObject,
   options: IDataObject,
   s3Creds: IDataObject
@@ -223,7 +169,7 @@ async function backupMongoDB(
 // PostgreSQL
 // ─────────────────────────────────────────────────────────────────────────────
 
-async function backupPostgreSQLDatabase(
+export async function backupPostgreSQLDatabase(
   creds: IDataObject,
   databaseName: string,
   options: IDataObject,
@@ -311,7 +257,7 @@ async function backupPostgreSQLDatabase(
   }
 }
 
-async function backupPostgreSQL(
+export async function backupPostgreSQL(
   creds: IDataObject,
   options: IDataObject,
   s3Creds: IDataObject
@@ -389,7 +335,7 @@ async function backupPostgreSQL(
 // RabbitMQ
 // ─────────────────────────────────────────────────────────────────────────────
 
-async function httpGet(
+export async function httpGet(
   url: string,
   headers: Record<string, string>
 ): Promise<IDataObject> {
@@ -407,7 +353,7 @@ async function httpGet(
   });
 }
 
-async function backupRabbitMQ(
+export async function backupRabbitMQ(
   creds: IDataObject,
   options: IDataObject,
   s3Creds: IDataObject
@@ -463,7 +409,7 @@ async function backupRabbitMQ(
 // Qdrant
 // ─────────────────────────────────────────────────────────────────────────────
 
-async function qdrantRequest(
+export async function qdrantRequest(
   url: string,
   method: string,
   apiKey?: string
@@ -498,7 +444,7 @@ async function qdrantRequest(
   });
 }
 
-async function backupQdrant(
+export async function backupQdrant(
   creds: IDataObject,
   options: IDataObject,
   s3Creds: IDataObject
@@ -584,216 +530,4 @@ async function backupQdrant(
     collections: targets.length,
     backups: results,
   };
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Node class
-// ─────────────────────────────────────────────────────────────────────────────
-
-export class BackupDbs implements INodeType {
-  description: INodeTypeDescription = {
-    displayName: "Backup DBs",
-    name: "backupDbs",
-    icon: "file:backupdbs.svg",
-    group: ["transform"],
-    version: 1,
-    subtitle: '={{$parameter["engine"] + " → S3"}}',
-    description:
-      "Backup RabbitMQ, MongoDB, PostgreSQL or Qdrant directly to Amazon S3",
-    defaults: { name: "Backup DBs" },
-    inputs: ["main"] as any,
-    outputs: ["main"] as any,
-    credentials: [
-      {
-        name: "backupAppApi",
-        displayName: "Backup (database + S3)",
-        required: true,
-        displayOptions: {
-          show: { engine: ["mongodb", "postgresql", "rabbitmq", "qdrant"] },
-        },
-      },
-    ],
-    properties: [
-      {
-        displayName:
-          "In **Backup (database + S3)** set Application to your database, fill connection fields and the Amazon S3 section at the bottom.",
-        name: "credentialsNotice",
-        type: "notice",
-        default: "",
-      },
-      {
-        displayName: "Engine",
-        name: "engine",
-        type: "options",
-        noDataExpression: true,
-        options: [
-          { name: "MongoDB", value: "mongodb" },
-          { name: "PostgreSQL", value: "postgresql" },
-          { name: "Qdrant", value: "qdrant" },
-          { name: "RabbitMQ", value: "rabbitmq" },
-        ],
-        default: "postgresql",
-      },
-      {
-        displayName: "Backup File Name",
-        name: "nameBackup",
-        type: "string",
-        default: "",
-        placeholder: "daily-backup",
-        description:
-          "File name uploaded to S3 (without folder path). Empty uses a timestamp. When backing up multiple targets, the database or collection name is appended.",
-      },
-      {
-        displayName: "Compress (gzip)",
-        name: "compress",
-        type: "boolean",
-        default: true,
-        displayOptions: {
-          show: { engine: ["mongodb", "postgresql", "rabbitmq"] },
-        },
-        description: "Whether to gzip the backup before uploading to S3",
-      },
-      {
-        displayName: "Include Schema",
-        name: "includeSchema",
-        type: "boolean",
-        default: true,
-        displayOptions: { show: { engine: ["postgresql"] } },
-        description:
-          "Whether to include column definitions alongside table data",
-      },
-      {
-        displayName: "Database",
-        name: "databaseScope",
-        type: "options",
-        noDataExpression: true,
-        options: [
-          { name: "All Databases", value: "all" },
-          { name: "Specific Database", value: "specific" },
-        ],
-        default: "all",
-        displayOptions: { show: { engine: ["mongodb", "postgresql"] } },
-      },
-      {
-        displayName: "Database Name",
-        name: "databaseName",
-        type: "string",
-        default: "",
-        placeholder: "my_database",
-        required: true,
-        displayOptions: {
-          show: {
-            engine: ["mongodb", "postgresql"],
-            databaseScope: ["specific"],
-          },
-        },
-      },
-      {
-        displayName: "Collection",
-        name: "collectionScope",
-        type: "options",
-        noDataExpression: true,
-        options: [
-          { name: "All Collections", value: "all" },
-          { name: "Specific Collection", value: "specific" },
-        ],
-        default: "all",
-        displayOptions: { show: { engine: ["qdrant"] } },
-      },
-      {
-        displayName: "Collection Name",
-        name: "collectionName",
-        type: "string",
-        default: "",
-        placeholder: "my_collection",
-        required: true,
-        displayOptions: {
-          show: { engine: ["qdrant"], collectionScope: ["specific"] },
-        },
-      },
-      {
-        displayName: "Export",
-        name: "rabbitExport",
-        type: "options",
-        noDataExpression: true,
-        options: [
-          {
-            name: "Full Definitions (vhost)",
-            value: "definitions",
-          },
-        ],
-        default: "definitions",
-        displayOptions: { show: { engine: ["rabbitmq"] } },
-        description:
-          "Exports the complete RabbitMQ definitions for the virtual host (queues, exchanges, bindings, users, permissions)",
-      },
-      {
-        displayName: "Snapshot Wait (seconds)",
-        name: "waitSeconds",
-        type: "number",
-        default: 30,
-        displayOptions: { show: { engine: ["qdrant"] } },
-        description:
-          "How long to wait for Qdrant to build the snapshot before downloading",
-      },
-    ],
-  };
-
-  async execute(this: IExecuteFunctions): Promise<INodeExecutionData[][]> {
-    const items = this.getInputData();
-    const returnData: IDataObject[] = [];
-
-    for (let i = 0; i < items.length; i++) {
-      try {
-        const engine = this.getNodeParameter("engine", i) as string;
-        const allCreds = await this.getCredentials("backupAppApi");
-        const s3Creds = extractS3Creds(allCreds);
-
-        const options: IDataObject = {
-          nameBackup: this.getNodeParameter("nameBackup", i, ""),
-          compress: this.getNodeParameter("compress", i, true),
-          includeSchema: this.getNodeParameter("includeSchema", i, true),
-          databaseScope: this.getNodeParameter("databaseScope", i, "all"),
-          databaseName: this.getNodeParameter("databaseName", i, ""),
-          collectionScope: this.getNodeParameter("collectionScope", i, "all"),
-          collectionName: this.getNodeParameter("collectionName", i, ""),
-          waitSeconds: this.getNodeParameter("waitSeconds", i, 30),
-        };
-
-        let result: IDataObject;
-
-        let dbCreds: IDataObject;
-        try {
-          dbCreds = extractDbCreds(allCreds, engine);
-        } catch (error) {
-          throw new NodeOperationError(this.getNode(), error as Error);
-        }
-
-        if (engine === "mongodb") {
-          result = await backupMongoDB(dbCreds, options, s3Creds);
-        } else if (engine === "postgresql") {
-          result = await backupPostgreSQL(dbCreds, options, s3Creds);
-        } else if (engine === "rabbitmq") {
-          result = await backupRabbitMQ(dbCreds, options, s3Creds);
-        } else if (engine === "qdrant") {
-          result = await backupQdrant(dbCreds, options, s3Creds);
-        } else {
-          throw new NodeOperationError(
-            this.getNode(),
-            `Unsupported engine: ${engine}`
-          );
-        }
-
-        returnData.push(result);
-      } catch (error) {
-        if (this.continueOnFail()) {
-          returnData.push({ success: false, error: (error as Error).message });
-          continue;
-        }
-        throw new NodeOperationError(this.getNode(), error as Error);
-      }
-    }
-
-    return [this.helpers.returnJsonArray(returnData)];
-  }
 }
