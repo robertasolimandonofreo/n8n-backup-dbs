@@ -19,29 +19,19 @@ All backups are streamed directly to S3 — nothing is written to disk on the n8
 
 ## Credentials
 
-Create **two** credentials per environment:
+### Backup DBs (one credential)
 
-### Database Backup
+**Application** options: MongoDB, PostgreSQL, Qdrant, RabbitMQ or **Amazon S3**.
 
-Choose **Application** (MongoDB, PostgreSQL, Qdrant or RabbitMQ). Only the fields for that app are shown.
+For database backups, pick your database in Application, fill connection fields, then scroll to the **Amazon S3** section (Access Key, bucket, region, etc.) in the same credential.
 
-| Application | Main fields |
+| Application | Connection fields |
 |---|---|
-| MongoDB | Connection URI, optional database, TLS |
+| MongoDB | URI, TLS |
 | PostgreSQL | Host, port, database, user, password, SSL |
-| Qdrant | Host URL, API key, skip TLS verify |
-| RabbitMQ | Management API URL, user, password, virtual host |
-
-### S3 Backup Storage
-
-| Field | Description |
-|---|---|
-| AWS Access Key ID | IAM access key |
-| AWS Secret Access Key | IAM secret key |
-| Session Token | Optional — for STS/AssumeRole temporary credentials |
-| Region | e.g. `us-east-1` |
-| Bucket | Target S3 bucket |
-| Key Prefix | Prefix added to every object key (default: `backups/`) |
+| Qdrant | Host URL, API key |
+| RabbitMQ | Management URL, user, password, vhost |
+| Amazon S3 | S3 fields only (when configuring S3 separately) |
 
 ## Node Options
 

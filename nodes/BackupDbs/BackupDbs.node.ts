@@ -78,52 +78,51 @@ function buildBackupFileName(
   return `${base}.${extension}`;
 }
 
-function resolveAppCreds(raw: IDataObject, engine: string): IDataObject {
-  const app = (raw.app as string) || engine;
-
-  if (app !== engine) {
+function extractDbCreds(raw: IDataObject, engine: string): IDataObject {
+  const app = raw.app as string;
+  if (app && app !== engine && app !== "s3") {
     throw new Error(
-      `Credential is for ${app} but the node is set to ${engine}. Use matching credentials or change Engine.`,
+      `Credential Application is ${app} but node Engine is ${engine}`,
     );
   }
 
   if (engine === "mongodb") {
-    const m = raw.mongodb as IDataObject | undefined;
-    return {
-      uri: (m?.uri ?? raw.uri) as string,
-      tls: (m?.tls ?? raw.tls) as boolean,
-    };
+    return { uri: raw.uri, tls: raw.tls };
   }
   if (engine === "postgresql") {
-    const p = raw.postgres as IDataObject | undefined;
     return {
-      host: (p?.host ?? raw.host) as string,
-      port: (p?.port ?? raw.port) as number,
-      database: (p?.database ?? raw.database) as string,
-      user: (p?.user ?? raw.user) as string,
-      password: (p?.password ?? raw.password) as string,
-      ssl: (p?.ssl ?? raw.ssl) as string,
+      host: raw.host,
+      port: raw.port,
+      database: raw.database,
+      user: raw.user,
+      password: raw.password,
+      ssl: raw.ssl,
     };
   }
   if (engine === "qdrant") {
-    const q = raw.qdrant as IDataObject | undefined;
-    return {
-      url: (q?.url ?? raw.url) as string,
-      apiKey: (q?.apiKey ?? raw.apiKey) as string,
-      skipVerify: (q?.skipVerify ?? raw.skipVerify) as boolean,
-    };
+    return { url: raw.url, apiKey: raw.apiKey, skipVerify: raw.skipVerify };
   }
   if (engine === "rabbitmq") {
-    const r = raw.rabbitmq as IDataObject | undefined;
     return {
-      url: (r?.url ?? raw.url) as string,
-      username: (r?.username ?? raw.username) as string,
-      password: (r?.password ?? raw.password) as string,
-      vhost: (r?.vhost ?? raw.vhost) as string,
+      url: raw.url,
+      username: raw.username,
+      password: raw.password,
+      vhost: raw.vhost,
     };
   }
 
-  throw new Error(`Unsupported application: ${engine}`);
+  throw new Error(`Unsupported engine: ${engine}`);
+}
+
+function extractS3Creds(raw: IDataObject): IDataObject {
+  return {
+    accessKeyId: raw.accessKeyId,
+    secretAccessKey: raw.secretAccessKey,
+    sessionToken: raw.sessionToken,
+    region: raw.region,
+    bucket: raw.bucket,
+    keyPrefix: raw.keyPrefix,
+  };
 }
 
 function requireSpecificName(scope: string, name: string, label: string): string {
@@ -607,13 +606,7 @@ export class BackupDbs implements INodeType {
     credentials: [
       {
         name: "backupAppApi",
-        required: true,
-        displayOptions: {
-          show: { engine: ["mongodb", "postgresql", "rabbitmq", "qdrant"] },
-        },
-      },
-      {
-        name: "s3BackupApi",
+        displayName: "Backup (database + S3)",
         required: true,
         displayOptions: {
           show: { engine: ["mongodb", "postgresql", "rabbitmq", "qdrant"] },
@@ -621,6 +614,13 @@ export class BackupDbs implements INodeType {
       },
     ],
     properties: [
+      {
+        displayName:
+          "In **Backup (database + S3)** set Application to your database, fill connection fields and the Amazon S3 section at the bottom.",
+        name: "credentialsNotice",
+        type: "notice",
+        default: "",
+      },
       {
         displayName: "Engine",
         name: "engine",
@@ -746,7 +746,8 @@ export class BackupDbs implements INodeType {
     for (let i = 0; i < items.length; i++) {
       try {
         const engine = this.getNodeParameter("engine", i) as string;
-        const s3Creds = await this.getCredentials("s3BackupApi");
+        const allCreds = await this.getCredentials("backupAppApi");
+        const s3Creds = extractS3Creds(allCreds);
 
         const options: IDataObject = {
           nameBackup: this.getNodeParameter("nameBackup", i, ""),
@@ -761,22 +762,21 @@ export class BackupDbs implements INodeType {
 
         let result: IDataObject;
 
-        const rawAppCreds = await this.getCredentials("backupAppApi");
-        let creds: IDataObject;
+        let dbCreds: IDataObject;
         try {
-          creds = resolveAppCreds(rawAppCreds, engine);
+          dbCreds = extractDbCreds(allCreds, engine);
         } catch (error) {
           throw new NodeOperationError(this.getNode(), error as Error);
         }
 
         if (engine === "mongodb") {
-          result = await backupMongoDB(creds, options, s3Creds);
+          result = await backupMongoDB(dbCreds, options, s3Creds);
         } else if (engine === "postgresql") {
-          result = await backupPostgreSQL(creds, options, s3Creds);
+          result = await backupPostgreSQL(dbCreds, options, s3Creds);
         } else if (engine === "rabbitmq") {
-          result = await backupRabbitMQ(creds, options, s3Creds);
+          result = await backupRabbitMQ(dbCreds, options, s3Creds);
         } else if (engine === "qdrant") {
-          result = await backupQdrant(creds, options, s3Creds);
+          result = await backupQdrant(dbCreds, options, s3Creds);
         } else {
           throw new NodeOperationError(
             this.getNode(),

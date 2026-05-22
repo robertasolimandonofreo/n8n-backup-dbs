@@ -2,7 +2,7 @@ import { ICredentialType, INodeProperties } from "n8n-workflow";
 
 export class BackupAppApi implements ICredentialType {
   name = "backupAppApi";
-  displayName = "Database Backup";
+  displayName = "Backup DBs";
   documentationUrl =
     "https://github.com/robertasolimandonofreo/n8n-backup-dbs#credentials";
   properties: INodeProperties[] = [
@@ -15,10 +15,10 @@ export class BackupAppApi implements ICredentialType {
         { name: "PostgreSQL", value: "postgresql" },
         { name: "Qdrant", value: "qdrant" },
         { name: "RabbitMQ", value: "rabbitmq" },
+        { name: "Amazon S3", value: "s3" },
       ],
       default: "mongodb",
       required: true,
-      description: "Database or broker to back up",
     },
     {
       displayName: "Connection URI",
@@ -28,7 +28,6 @@ export class BackupAppApi implements ICredentialType {
       default: "mongodb://localhost:27017",
       required: true,
       displayOptions: { show: { app: ["mongodb"] } },
-      description: "Full URI (e.g. mongodb://user:pass@host:27017/dbname)",
     },
     {
       displayName: "TLS/SSL",
@@ -99,7 +98,7 @@ export class BackupAppApi implements ICredentialType {
       default: "http://localhost:6333",
       required: true,
       displayOptions: { show: { app: ["qdrant", "rabbitmq"] } },
-      description: "Qdrant REST API or RabbitMQ Management API base URL",
+      description: "Qdrant REST API or RabbitMQ Management API URL",
     },
     {
       displayName: "API Key",
@@ -130,6 +129,76 @@ export class BackupAppApi implements ICredentialType {
       type: "string",
       default: "/",
       displayOptions: { show: { app: ["rabbitmq"] } },
+    },
+    {
+      displayName:
+        "Amazon S3 destination — fill this section when Application is a database, or choose Application **Amazon S3** for S3 only.",
+      name: "s3Notice",
+      type: "notice",
+      default: "",
+      displayOptions: {
+        show: { app: ["mongodb", "postgresql", "qdrant", "rabbitmq", "s3"] },
+      },
+    },
+    {
+      displayName: "AWS Access Key ID",
+      name: "accessKeyId",
+      type: "string",
+      default: "",
+      required: true,
+      displayOptions: {
+        show: { app: ["mongodb", "postgresql", "qdrant", "rabbitmq", "s3"] },
+      },
+    },
+    {
+      displayName: "AWS Secret Access Key",
+      name: "secretAccessKey",
+      type: "string",
+      typeOptions: { password: true },
+      default: "",
+      required: true,
+      displayOptions: {
+        show: { app: ["mongodb", "postgresql", "qdrant", "rabbitmq", "s3"] },
+      },
+    },
+    {
+      displayName: "Session Token",
+      name: "sessionToken",
+      type: "string",
+      typeOptions: { password: true },
+      default: "",
+      displayOptions: {
+        show: { app: ["mongodb", "postgresql", "qdrant", "rabbitmq", "s3"] },
+      },
+    },
+    {
+      displayName: "Region",
+      name: "region",
+      type: "string",
+      default: "us-east-1",
+      required: true,
+      displayOptions: {
+        show: { app: ["mongodb", "postgresql", "qdrant", "rabbitmq", "s3"] },
+      },
+    },
+    {
+      displayName: "Bucket",
+      name: "bucket",
+      type: "string",
+      default: "",
+      required: true,
+      displayOptions: {
+        show: { app: ["mongodb", "postgresql", "qdrant", "rabbitmq", "s3"] },
+      },
+    },
+    {
+      displayName: "Key Prefix",
+      name: "keyPrefix",
+      type: "string",
+      default: "backups/",
+      displayOptions: {
+        show: { app: ["mongodb", "postgresql", "qdrant", "rabbitmq", "s3"] },
+      },
     },
   ];
 }
