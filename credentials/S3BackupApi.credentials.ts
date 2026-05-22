@@ -6,6 +6,13 @@ export class S3BackupApi implements ICredentialType {
   documentationUrl = "https://docs.aws.amazon.com/s3/";
   properties: INodeProperties[] = [
     {
+      displayName:
+        "Amazon S3 destination for backups. Create a separate **Database Backup** credential for MongoDB, PostgreSQL, Qdrant or RabbitMQ.",
+      name: "s3Notice",
+      type: "notice",
+      default: "",
+    },
+    {
       displayName: "AWS Access Key ID",
       name: "accessKeyId",
       type: "string",

@@ -1,6 +1,6 @@
 {
     "name": "n8n-nodes-backup-dbs-rsd",
-    "version": "0.1.0",
+    "version": "0.2.0",
     "description": "n8n community node to backup RabbitMQ, MongoDB, PostgreSQL and Qdrant directly to Amazon S3",
     "keywords": [
       "n8n-community-node-package",
@@ -32,10 +32,7 @@
     "n8n": {
       "n8nNodesApiVersion": 1,
       "credentials": [
-        "dist/credentials/MongoDbBackupApi.credentials.js",
-        "dist/credentials/PostgresBackupApi.credentials.js",
-        "dist/credentials/RabbitMqBackupApi.credentials.js",
-        "dist/credentials/QdrantBackupApi.credentials.js",
+        "dist/credentials/BackupAppApi.credentials.js",
         "dist/credentials/S3BackupApi.credentials.js"
       ],
       "nodes": [

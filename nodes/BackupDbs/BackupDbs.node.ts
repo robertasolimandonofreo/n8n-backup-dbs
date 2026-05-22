@@ -57,6 +57,77 @@ function timestamp(): string {
   return new Date().toISOString().replace(/[:.]/g, "-");
 }
 
+function sanitizeBackupFileName(name: string): string {
+  return name.replace(/[^a-zA-Z0-9._-]/g, "_").replace(/^\.+/, "");
+}
+
+function buildBackupFileName(
+  options: IDataObject,
+  extension: string,
+  suffix?: string
+): string {
+  const custom = sanitizeBackupFileName(
+    ((options.nameBackup as string) || "").trim()
+  );
+
+  if (!custom) {
+    return `${timestamp()}${suffix ? `_${suffix}` : ""}.${extension}`;
+  }
+
+  const base = suffix ? `${custom}_${suffix}` : custom;
+  return `${base}.${extension}`;
+}
+
+function resolveAppCreds(raw: IDataObject, engine: string): IDataObject {
+  const app = (raw.app as string) || engine;
+
+  if (app !== engine) {
+    throw new Error(
+      `Credential is for ${app} but the node is set to ${engine}. Use matching credentials or change Engine.`,
+    );
+  }
+
+  if (engine === "mongodb") {
+    const m = (raw.mongodb ?? raw) as IDataObject;
+    return { uri: m.uri, tls: m.tls };
+  }
+  if (engine === "postgresql") {
+    const p = (raw.postgres ?? raw) as IDataObject;
+    return {
+      host: p.host,
+      port: p.port,
+      database: p.database,
+      user: p.user,
+      password: p.password,
+      ssl: p.ssl,
+    };
+  }
+  if (engine === "qdrant") {
+    const q = (raw.qdrant ?? raw) as IDataObject;
+    return { url: q.url, apiKey: q.apiKey, skipVerify: q.skipVerify };
+  }
+  if (engine === "rabbitmq") {
+    const r = (raw.rabbitmq ?? raw) as IDataObject;
+    return {
+      url: r.url,
+      username: r.username,
+      password: r.password,
+      vhost: r.vhost,
+    };
+  }
+
+  throw new Error(`Unsupported application: ${engine}`);
+}
+
+function requireSpecificName(scope: string, name: string, label: string): string {
+  if (scope !== "specific") return "";
+  const trimmed = name.trim();
+  if (!trimmed) {
+    throw new Error(`${label} is required when scope is set to a specific target`);
+  }
+  return trimmed;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // MongoDB
 // ─────────────────────────────────────────────────────────────────────────────
@@ -75,13 +146,19 @@ async function backupMongoDB(
   try {
     await client.connect();
     const compress = (options.compress as boolean) ?? true;
-    const targetDb = (creds.database as string) || null;
+    const scope = (options.databaseScope as string) || "all";
+    const specificDb = requireSpecificName(
+      scope,
+      (options.databaseName as string) || "",
+      "Database name"
+    );
 
-    const dbNames: string[] = targetDb
-      ? [targetDb]
-      : (await client.db("admin").admin().listDatabases()).databases
-          .map((d: { name: string }) => d.name)
-          .filter((n: string) => !["admin", "local", "config"].includes(n));
+    const dbNames: string[] =
+      scope === "specific"
+        ? [specificDb]
+        : (await client.db("admin").admin().listDatabases()).databases
+            .map((d: { name: string }) => d.name)
+            .filter((n: string) => !["admin", "local", "config"].includes(n));
 
     const results: IDataObject[] = [];
 
@@ -103,7 +180,12 @@ async function backupMongoDB(
       if (compress) body = await gzipAsync(body);
 
       const ext = compress ? "json.gz" : "json";
-      const key = `mongodb/${dbName}/${timestamp()}.${ext}`;
+      const fileName = buildBackupFileName(
+        options,
+        ext,
+        dbNames.length > 1 ? dbName : undefined
+      );
+      const key = `mongodb/${dbName}/${fileName}`;
       const s3Uri = await uploadToS3(
         s3Creds,
         key,
@@ -120,7 +202,12 @@ async function backupMongoDB(
       });
     }
 
-    return { success: true, engine: "mongodb", backups: results };
+    return {
+      success: true,
+      engine: "mongodb",
+      scope: (options.databaseScope as string) || "all",
+      backups: results,
+    };
   } finally {
     await client.close();
   }
@@ -130,10 +217,12 @@ async function backupMongoDB(
 // PostgreSQL
 // ─────────────────────────────────────────────────────────────────────────────
 
-async function backupPostgreSQL(
+async function backupPostgreSQLDatabase(
   creds: IDataObject,
+  databaseName: string,
   options: IDataObject,
-  s3Creds: IDataObject
+  s3Creds: IDataObject,
+  fileSuffix?: string
 ): Promise<IDataObject> {
   const { Client } = await import("pg");
 
@@ -146,7 +235,7 @@ async function backupPostgreSQL(
   const client = new Client({
     host: creds.host as string,
     port: creds.port as number,
-    database: creds.database as string,
+    database: databaseName,
     user: creds.user as string,
     password: creds.password as string,
     ssl: sslMap[(creds.ssl as string) || "disable"] as any,
@@ -158,7 +247,7 @@ async function backupPostgreSQL(
     const compress = (options.compress as boolean) ?? true;
     const includeSchema = (options.includeSchema as boolean) ?? true;
     const dump: IDataObject = {
-      database: creds.database as string,
+      database: databaseName,
       exportedAt: new Date().toISOString(),
       tables: {},
     };
@@ -195,7 +284,8 @@ async function backupPostgreSQL(
     if (compress) body = await gzipAsync(body);
 
     const ext = compress ? "json.gz" : "json";
-    const key = `postgresql/${creds.database}/${timestamp()}.${ext}`;
+    const fileName = buildBackupFileName(options, ext, fileSuffix);
+    const key = `postgresql/${databaseName}/${fileName}`;
     const s3Uri = await uploadToS3(
       s3Creds,
       key,
@@ -204,9 +294,7 @@ async function backupPostgreSQL(
     );
 
     return {
-      success: true,
-      engine: "postgresql",
-      database: creds.database,
+      database: databaseName,
       tables: tablesRes.rows.length,
       s3Uri,
       compressed: compress,
@@ -215,6 +303,80 @@ async function backupPostgreSQL(
   } finally {
     await client.end();
   }
+}
+
+async function backupPostgreSQL(
+  creds: IDataObject,
+  options: IDataObject,
+  s3Creds: IDataObject
+): Promise<IDataObject> {
+  const { Client } = await import("pg");
+
+  const sslMap: Record<string, boolean | object> = {
+    disable: false,
+    allow: true,
+    require: { rejectUnauthorized: false },
+  };
+
+  const scope = (options.databaseScope as string) || "all";
+  const specificDb = requireSpecificName(
+    scope,
+    (options.databaseName as string) || "",
+    "Database name"
+  );
+
+  const baseConfig = {
+    host: creds.host as string,
+    port: creds.port as number,
+    user: creds.user as string,
+    password: creds.password as string,
+    ssl: sslMap[(creds.ssl as string) || "disable"] as any,
+  };
+
+  let databaseNames: string[];
+
+  if (scope === "specific") {
+    databaseNames = [specificDb];
+  } else {
+    const listClient = new Client({
+      ...baseConfig,
+      database: creds.database as string,
+    });
+    await listClient.connect();
+    try {
+      const res = await listClient.query(`
+        SELECT datname FROM pg_database
+        WHERE datallowconn = true AND datistemplate = false
+        AND datname NOT IN ('template0', 'template1')
+        ORDER BY datname
+      `);
+      databaseNames = res.rows.map((r: { datname: string }) => r.datname);
+    } finally {
+      await listClient.end();
+    }
+  }
+
+  const backups: IDataObject[] = [];
+  const multiDb = databaseNames.length > 1;
+  for (const dbName of databaseNames) {
+    backups.push(
+      await backupPostgreSQLDatabase(
+        creds,
+        dbName,
+        options,
+        s3Creds,
+        multiDb ? dbName : undefined
+      )
+    );
+  }
+
+  return {
+    success: true,
+    engine: "postgresql",
+    scope,
+    databases: databaseNames.length,
+    backups,
+  };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -271,7 +433,8 @@ async function backupRabbitMQ(
 
   const safeVhost = (creds.vhost as string).replace(/\//g, "_") || "default";
   const ext = compress ? "json.gz" : "json";
-  const key = `rabbitmq/${safeVhost}/${timestamp()}.${ext}`;
+  const fileName = buildBackupFileName(options, ext);
+  const key = `rabbitmq/${safeVhost}/${fileName}`;
   const s3Uri = await uploadToS3(
     s3Creds,
     key,
@@ -282,6 +445,7 @@ async function backupRabbitMQ(
   return {
     success: true,
     engine: "rabbitmq",
+    exportType: "definitions",
     vhost: creds.vhost,
     s3Uri,
     compressed: compress,
@@ -336,7 +500,12 @@ async function backupQdrant(
   const baseUrl = (creds.url as string).replace(/\/$/, "");
   const apiKey = creds.apiKey as string | undefined;
   const waitMs = ((options.waitSeconds as number) ?? 30) * 1000;
-  const collectionFilter = (options.collections as string) || "";
+  const scope = (options.collectionScope as string) || "all";
+  const specificCollection = requireSpecificName(
+    scope,
+    (options.collectionName as string) || "",
+    "Collection name"
+  );
 
   const colRes = await qdrantRequest(`${baseUrl}/collections`, "GET", apiKey);
   if (!colRes.ok)
@@ -345,14 +514,18 @@ async function backupQdrant(
   const allCollections = ((colRes.data as any).result?.collections ?? []).map(
     (c: { name: string }) => c.name
   ) as string[];
-  const targets = collectionFilter
-    ? allCollections.filter((n) =>
-        collectionFilter
-          .split(",")
-          .map((s: string) => s.trim())
-          .includes(n)
-      )
-    : allCollections;
+
+  let targets: string[];
+  if (scope === "specific") {
+    if (!allCollections.includes(specificCollection)) {
+      throw new Error(
+        `Collection "${specificCollection}" not found. Available: ${allCollections.join(", ") || "(none)"}`
+      );
+    }
+    targets = [specificCollection];
+  } else {
+    targets = allCollections;
+  }
 
   const results: IDataObject[] = [];
 
@@ -377,7 +550,12 @@ async function backupQdrant(
       apiKey
     );
     const snapshotBuf = Buffer.from(JSON.stringify(dlRes.data));
-    const key = `qdrant/${collection}/${timestamp()}.snapshot`;
+    const fileName = buildBackupFileName(
+      options,
+      "snapshot",
+      targets.length > 1 ? collection : undefined
+    );
+    const key = `qdrant/${collection}/${fileName}`;
     const s3Uri = await uploadToS3(
       s3Creds,
       key,
@@ -396,6 +574,7 @@ async function backupQdrant(
   return {
     success: true,
     engine: "qdrant",
+    scope,
     collections: targets.length,
     backups: results,
   };
@@ -420,31 +599,18 @@ export class BackupDbs implements INodeType {
     outputs: ["main"] as any,
     credentials: [
       {
-        name: "s3BackupApi",
+        name: "backupAppApi",
         required: true,
         displayOptions: {
           show: { engine: ["mongodb", "postgresql", "rabbitmq", "qdrant"] },
         },
       },
       {
-        name: "mongoDbBackupApi",
+        name: "s3BackupApi",
         required: true,
-        displayOptions: { show: { engine: ["mongodb"] } },
-      },
-      {
-        name: "postgresBackupApi",
-        required: true,
-        displayOptions: { show: { engine: ["postgresql"] } },
-      },
-      {
-        name: "rabbitMqBackupApi",
-        required: true,
-        displayOptions: { show: { engine: ["rabbitmq"] } },
-      },
-      {
-        name: "qdrantBackupApi",
-        required: true,
-        displayOptions: { show: { engine: ["qdrant"] } },
+        displayOptions: {
+          show: { engine: ["mongodb", "postgresql", "rabbitmq", "qdrant"] },
+        },
       },
     ],
     properties: [
@@ -460,6 +626,15 @@ export class BackupDbs implements INodeType {
           { name: "RabbitMQ", value: "rabbitmq" },
         ],
         default: "postgresql",
+      },
+      {
+        displayName: "Backup File Name",
+        name: "nameBackup",
+        type: "string",
+        default: "",
+        placeholder: "daily-backup",
+        description:
+          "File name uploaded to S3 (without folder path). Empty uses a timestamp. When backing up multiple targets, the database or collection name is appended.",
       },
       {
         displayName: "Compress (gzip)",
@@ -481,22 +656,69 @@ export class BackupDbs implements INodeType {
           "Whether to include column definitions alongside table data",
       },
       {
-        displayName: "Notice",
-        name: "mongoNotice",
-        type: "notice",
-        default:
-          "All collections are exported as JSON. If Database is set in credentials only that DB is backed up; otherwise all accessible databases are included.",
-        displayOptions: { show: { engine: ["mongodb"] } },
+        displayName: "Database",
+        name: "databaseScope",
+        type: "options",
+        noDataExpression: true,
+        options: [
+          { name: "All Databases", value: "all" },
+          { name: "Specific Database", value: "specific" },
+        ],
+        default: "all",
+        displayOptions: { show: { engine: ["mongodb", "postgresql"] } },
       },
       {
-        displayName: "Collections",
-        name: "collections",
+        displayName: "Database Name",
+        name: "databaseName",
         type: "string",
         default: "",
-        placeholder: "products, users",
+        placeholder: "my_database",
+        required: true,
+        displayOptions: {
+          show: {
+            engine: ["mongodb", "postgresql"],
+            databaseScope: ["specific"],
+          },
+        },
+      },
+      {
+        displayName: "Collection",
+        name: "collectionScope",
+        type: "options",
+        noDataExpression: true,
+        options: [
+          { name: "All Collections", value: "all" },
+          { name: "Specific Collection", value: "specific" },
+        ],
+        default: "all",
         displayOptions: { show: { engine: ["qdrant"] } },
+      },
+      {
+        displayName: "Collection Name",
+        name: "collectionName",
+        type: "string",
+        default: "",
+        placeholder: "my_collection",
+        required: true,
+        displayOptions: {
+          show: { engine: ["qdrant"], collectionScope: ["specific"] },
+        },
+      },
+      {
+        displayName: "Export",
+        name: "rabbitExport",
+        type: "options",
+        noDataExpression: true,
+        options: [
+          {
+            name: "Full Definitions (vhost)",
+            value: "definitions",
+          },
+        ],
+        default: "definitions",
+        displayOptions: { show: { engine: ["rabbitmq"] } },
         description:
-          "Comma-separated collection names. Leave empty to snapshot all collections.",
+          "Exports the complete RabbitMQ definitions for the virtual host (queues, exchanges, bindings, users, permissions)",
       },
       {
         displayName: "Snapshot Wait (seconds)",
@@ -520,25 +742,33 @@ export class BackupDbs implements INodeType {
         const s3Creds = await this.getCredentials("s3BackupApi");
 
         const options: IDataObject = {
+          nameBackup: this.getNodeParameter("nameBackup", i, ""),
           compress: this.getNodeParameter("compress", i, true),
           includeSchema: this.getNodeParameter("includeSchema", i, true),
-          collections: this.getNodeParameter("collections", i, ""),
+          databaseScope: this.getNodeParameter("databaseScope", i, "all"),
+          databaseName: this.getNodeParameter("databaseName", i, ""),
+          collectionScope: this.getNodeParameter("collectionScope", i, "all"),
+          collectionName: this.getNodeParameter("collectionName", i, ""),
           waitSeconds: this.getNodeParameter("waitSeconds", i, 30),
         };
 
         let result: IDataObject;
 
+        const rawAppCreds = await this.getCredentials("backupAppApi");
+        let creds: IDataObject;
+        try {
+          creds = resolveAppCreds(rawAppCreds, engine);
+        } catch (error) {
+          throw new NodeOperationError(this.getNode(), error as Error);
+        }
+
         if (engine === "mongodb") {
-          const creds = await this.getCredentials("mongoDbBackupApi");
           result = await backupMongoDB(creds, options, s3Creds);
         } else if (engine === "postgresql") {
-          const creds = await this.getCredentials("postgresBackupApi");
           result = await backupPostgreSQL(creds, options, s3Creds);
         } else if (engine === "rabbitmq") {
-          const creds = await this.getCredentials("rabbitMqBackupApi");
           result = await backupRabbitMQ(creds, options, s3Creds);
         } else if (engine === "qdrant") {
-          const creds = await this.getCredentials("qdrantBackupApi");
           result = await backupQdrant(creds, options, s3Creds);
         } else {
           throw new NodeOperationError(

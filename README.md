@@ -19,7 +19,20 @@ All backups are streamed directly to S3 — nothing is written to disk on the n8
 
 ## Credentials
 
-### S3 Backup Storage (required for all engines)
+Create **two** credentials per environment:
+
+### Database Backup
+
+Choose **Application** (MongoDB, PostgreSQL, Qdrant or RabbitMQ). Only the fields for that app are shown.
+
+| Application | Main fields |
+|---|---|
+| MongoDB | Connection URI, optional database, TLS |
+| PostgreSQL | Host, port, database, user, password, SSL |
+| Qdrant | Host URL, API key, skip TLS verify |
+| RabbitMQ | Management API URL, user, password, virtual host |
+
+### S3 Backup Storage
 
 | Field | Description |
 |---|---|
@@ -30,48 +43,17 @@ All backups are streamed directly to S3 — nothing is written to disk on the n8
 | Bucket | Target S3 bucket |
 | Key Prefix | Prefix added to every object key (default: `backups/`) |
 
-### MongoDB Backup
-
-| Field | Description |
-|---|---|
-| Connection URI | Full URI e.g. `mongodb://user:pass@host:27017/mydb` |
-| Database | Leave blank to backup all accessible databases |
-| TLS/SSL | Enable TLS |
-
-### PostgreSQL Backup
-
-| Field | Description |
-|---|---|
-| Host | Database host |
-| Port | Default `5432` |
-| Database | Database name |
-| User / Password | Credentials |
-| SSL | `disable`, `allow` or `require` |
-
-### RabbitMQ Backup
-
-| Field | Description |
-|---|---|
-| Management API URL | e.g. `http://localhost:15672` |
-| Username / Password | Management credentials |
-| Virtual Host | Default `/` |
-
-### Qdrant Backup
-
-| Field | Description |
-|---|---|
-| Host URL | e.g. `http://localhost:6333` |
-| API Key | Leave empty for open instances |
-| TLS / Skip Verify | Skip certificate verification |
-
 ## Node Options
 
 | Option | Engines | Description |
 |---|---|---|
-| Compress (gzip) | MongoDB, PostgreSQL, RabbitMQ | Gzip before upload — reduces S3 storage cost |
-| Include Schema | PostgreSQL | Include column definitions alongside data |
-| Collections | Qdrant | Comma-separated collection names (empty = all) |
-| Snapshot Wait (seconds) | Qdrant | Wait time for snapshot to build (default 30s) |
+| Backup File Name | All | S3 object file name (empty = timestamp) |
+| Database | MongoDB, PostgreSQL | **All Databases** or **Specific Database** + name |
+| Collection | Qdrant | **All Collections** or **Specific Collection** + name |
+| Export | RabbitMQ | Full **definitions** of the virtual host (queues, exchanges, bindings, etc.) |
+| Compress (gzip) | MongoDB, PostgreSQL, RabbitMQ | Gzip before upload |
+| Include Schema | PostgreSQL | Column definitions alongside table data |
+| Snapshot Wait (seconds) | Qdrant | Wait time for snapshot build (default 30s) |
 
 ## S3 Key Structure
 
