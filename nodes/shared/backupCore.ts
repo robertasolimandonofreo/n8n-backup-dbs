@@ -7,6 +7,7 @@ import {
   resolveCompression,
 } from "./backupCompression";
 import { withPostgresClient } from "./postgresClient";
+import { uploadRecordBatches } from "./backupSerialize";
 import { ROW_BATCH_SIZE } from "./backupSummary";
 
 export async function uploadToS3(
@@ -141,48 +142,48 @@ export async function backupMongoDB(
         let batch: unknown[] = [];
         let part = 0;
 
-        const flushBatch = async (rows: unknown[], partIndex: number) => {
-          const body = await jsonToBuffer(
+        const flushBatch = async (rows: unknown[]) => {
+          part = await uploadRecordBatches(
+            rows,
             {
               database: dbName,
               collection: col.name,
               exportedAt,
-              part: partIndex,
-              documents: rows,
             },
-            compression
+            compression,
+            async (body, partIndex, rowCount) => {
+              const fileStem =
+                partIndex > 1
+                  ? `${col.name}_part${String(partIndex).padStart(4, "0")}`
+                  : col.name;
+              const key = `mongodb/${dbName}/${baseName}/${fileStem}.${ext}`;
+              const s3Uri = await uploadToS3(
+                s3Creds,
+                key,
+                body,
+                backupContentType(compression)
+              );
+              uploads.push({
+                collection: col.name,
+                part: partIndex,
+                s3Uri,
+                sizeBytes: body.byteLength,
+                rowCount,
+              });
+            },
+            part
           );
-          const fileStem =
-            partIndex > 1
-              ? `${col.name}_part${String(partIndex).padStart(4, "0")}`
-              : col.name;
-          const key = `mongodb/${dbName}/${baseName}/${fileStem}.${ext}`;
-          const s3Uri = await uploadToS3(
-            s3Creds,
-            key,
-            body,
-            backupContentType(compression)
-          );
-          uploads.push({
-            collection: col.name,
-            part: partIndex,
-            s3Uri,
-            sizeBytes: body.byteLength,
-            rowCount: rows.length,
-          });
         };
 
         for await (const doc of cursor) {
           batch.push(doc);
           if (batch.length >= ROW_BATCH_SIZE) {
-            part += 1;
-            await flushBatch(batch, part);
+            await flushBatch(batch);
             batch = [];
           }
         }
 
-        part += 1;
-        await flushBatch(batch, part);
+        await flushBatch(batch);
       }
 
       results.push({
@@ -296,35 +297,36 @@ export async function backupPostgreSQLDatabase(
 
       if (rows.length === 0 && part > 0) break;
 
-      part += 1;
-      const body = await jsonToBuffer(
+      part = await uploadRecordBatches(
+        rows,
         {
           database: databaseName,
           table: tablename,
           exportedAt,
-          part,
-          rows,
         },
-        compression
+        compression,
+        async (body, partIndex, rowCount) => {
+          const fileStem =
+            partIndex > 1
+              ? `${tablename}_part${String(partIndex).padStart(4, "0")}`
+              : tablename;
+          const key = `postgresql/${databaseName}/${baseName}/${fileStem}.${ext}`;
+          const s3Uri = await uploadToS3(
+            s3Creds,
+            key,
+            body,
+            backupContentType(compression)
+          );
+          uploads.push({
+            table: tablename,
+            part: partIndex,
+            s3Uri,
+            sizeBytes: body.byteLength,
+            rowCount,
+          });
+        },
+        part
       );
-      const fileStem =
-        part > 1
-          ? `${tablename}_part${String(part).padStart(4, "0")}`
-          : tablename;
-      const key = `postgresql/${databaseName}/${baseName}/${fileStem}.${ext}`;
-      const s3Uri = await uploadToS3(
-        s3Creds,
-        key,
-        body,
-        backupContentType(compression)
-      );
-      uploads.push({
-        table: tablename,
-        part,
-        s3Uri,
-        sizeBytes: body.byteLength,
-        rowCount: rows.length,
-      });
 
       if (rows.length < ROW_BATCH_SIZE) break;
       offset += rows.length;

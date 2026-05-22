@@ -1,6 +1,6 @@
 import type { IDataObject } from "n8n-workflow";
 
-const ROW_BATCH_SIZE = 10000;
+const ROW_BATCH_SIZE = 1000;
 
 export { ROW_BATCH_SIZE };
 
