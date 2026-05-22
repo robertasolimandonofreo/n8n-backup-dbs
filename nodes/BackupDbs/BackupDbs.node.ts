@@ -88,31 +88,38 @@ function resolveAppCreds(raw: IDataObject, engine: string): IDataObject {
   }
 
   if (engine === "mongodb") {
-    const m = (raw.mongodb ?? raw) as IDataObject;
-    return { uri: m.uri, tls: m.tls };
+    const m = raw.mongodb as IDataObject | undefined;
+    return {
+      uri: (m?.uri ?? raw.uri) as string,
+      tls: (m?.tls ?? raw.tls) as boolean,
+    };
   }
   if (engine === "postgresql") {
-    const p = (raw.postgres ?? raw) as IDataObject;
+    const p = raw.postgres as IDataObject | undefined;
     return {
-      host: p.host,
-      port: p.port,
-      database: p.database,
-      user: p.user,
-      password: p.password,
-      ssl: p.ssl,
+      host: (p?.host ?? raw.host) as string,
+      port: (p?.port ?? raw.port) as number,
+      database: (p?.database ?? raw.database) as string,
+      user: (p?.user ?? raw.user) as string,
+      password: (p?.password ?? raw.password) as string,
+      ssl: (p?.ssl ?? raw.ssl) as string,
     };
   }
   if (engine === "qdrant") {
-    const q = (raw.qdrant ?? raw) as IDataObject;
-    return { url: q.url, apiKey: q.apiKey, skipVerify: q.skipVerify };
+    const q = raw.qdrant as IDataObject | undefined;
+    return {
+      url: (q?.url ?? raw.url) as string,
+      apiKey: (q?.apiKey ?? raw.apiKey) as string,
+      skipVerify: (q?.skipVerify ?? raw.skipVerify) as boolean,
+    };
   }
   if (engine === "rabbitmq") {
-    const r = (raw.rabbitmq ?? raw) as IDataObject;
+    const r = raw.rabbitmq as IDataObject | undefined;
     return {
-      url: r.url,
-      username: r.username,
-      password: r.password,
-      vhost: r.vhost,
+      url: (r?.url ?? raw.url) as string,
+      username: (r?.username ?? raw.username) as string,
+      password: (r?.password ?? raw.password) as string,
+      vhost: (r?.vhost ?? raw.vhost) as string,
     };
   }
 

@@ -1,6 +1,6 @@
 {
     "name": "n8n-nodes-backup-dbs-rsd",
-    "version": "0.2.0",
+    "version": "0.3.0",
     "description": "n8n community node to backup RabbitMQ, MongoDB, PostgreSQL and Qdrant directly to Amazon S3",
     "keywords": [
       "n8n-community-node-package",
@@ -21,7 +21,8 @@
       "url": "https://github.com/robertasolimandonofreo/n8n-backup-dbs.git"
     },
     "scripts": {
-      "build": "tsc && gulp build:icons",
+      "clean": "rm -rf dist",
+      "build": "npm run clean && tsc && gulp build:icons",
       "dev": "tsc --watch",
       "format": "prettier nodes credentials --write",
       "prepublishOnly": "npm run build"
