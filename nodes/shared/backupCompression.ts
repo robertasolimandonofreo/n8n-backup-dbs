@@ -56,7 +56,10 @@ function brotliAsync(buf: Buffer): Promise<Buffer> {
 }
 
 function lz4Async(buf: Buffer): Promise<Buffer> {
-  return import("lz4").then((lz4) => lz4.encode(buf));
+  return import("lz4js").then((lz4js) => {
+    const compressed = lz4js.compress(buf);
+    return Buffer.from(compressed);
+  });
 }
 
 function lzmaAsync(buf: Buffer): Promise<Buffer> {

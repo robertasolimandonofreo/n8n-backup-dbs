@@ -6,6 +6,7 @@ import {
   jsonToBuffer,
   resolveCompression,
 } from "./backupCompression";
+import { withPostgresClient } from "./postgresClient";
 import { ROW_BATCH_SIZE } from "./backupSummary";
 
 export async function uploadToS3(
@@ -215,130 +216,128 @@ export async function backupPostgreSQLDatabase(
   s3Creds: IDataObject,
   fileSuffix?: string
 ): Promise<IDataObject> {
-  const { Client } = await import("pg");
+  const compression = resolveCompression(options);
+  const includeSchema = (options.includeSchema as boolean) ?? true;
+  const exportedAt = new Date().toISOString();
+  const baseName = buildBackupBaseName(options, fileSuffix);
+  const ext = backupDataExtension(compression);
+  const uploads: IDataObject[] = [];
 
-  const sslMap: Record<string, boolean | object> = {
-    disable: false,
-    allow: true,
-    require: { rejectUnauthorized: false },
-  };
-
-  const client = new Client({
-    host: creds.host as string,
-    port: creds.port as number,
-    database: databaseName,
-    user: creds.user as string,
-    password: creds.password as string,
-    ssl: sslMap[(creds.ssl as string) || "disable"] as any,
-  });
-
-  await client.connect();
-
-  try {
-    const compression = resolveCompression(options);
-    const includeSchema = (options.includeSchema as boolean) ?? true;
-    const exportedAt = new Date().toISOString();
-    const baseName = buildBackupBaseName(options, fileSuffix);
-    const ext = backupDataExtension(compression);
-    const uploads: IDataObject[] = [];
-
-    if (includeSchema) {
-      const res = await client.query(`
-				SELECT table_name, column_name, data_type, is_nullable, column_default
-				FROM information_schema.columns
-				WHERE table_schema = 'public'
-				ORDER BY table_name, ordinal_position
-			`);
-      const schema: IDataObject = {};
-      for (const row of res.rows) {
-        if (!schema[row.table_name]) schema[row.table_name] = [];
-        (schema[row.table_name] as object[]).push({
-          column: row.column_name,
-          type: row.data_type,
-          nullable: row.is_nullable === "YES",
-          default: row.column_default,
-        });
+  if (includeSchema) {
+    const schema = await withPostgresClient(
+      creds,
+      databaseName,
+      async (client) => {
+        const res = await client.query(`
+          SELECT table_name, column_name, data_type, is_nullable, column_default
+          FROM information_schema.columns
+          WHERE table_schema = 'public'
+          ORDER BY table_name, ordinal_position
+        `);
+        const out: IDataObject = {};
+        for (const row of res.rows) {
+          if (!out[row.table_name]) out[row.table_name] = [];
+          (out[row.table_name] as object[]).push({
+            column: row.column_name,
+            type: row.data_type,
+            nullable: row.is_nullable === "YES",
+            default: row.column_default,
+          });
+        }
+        return out;
       }
+    );
 
-      const schemaBody = await jsonToBuffer(
-        { database: databaseName, exportedAt, schema },
+    const schemaBody = await jsonToBuffer(
+      { database: databaseName, exportedAt, schema },
+      compression
+    );
+    const schemaKey = `postgresql/${databaseName}/${baseName}/_schema.${ext}`;
+    const schemaUri = await uploadToS3(
+      s3Creds,
+      schemaKey,
+      schemaBody,
+      backupContentType(compression)
+    );
+    uploads.push({
+      table: "_schema",
+      s3Uri: schemaUri,
+      sizeBytes: schemaBody.byteLength,
+    });
+  }
+
+  const tableNames = await withPostgresClient(
+    creds,
+    databaseName,
+    async (client) => {
+      const tablesRes = await client.query(
+        `SELECT tablename FROM pg_tables WHERE schemaname = 'public'`
+      );
+      return tablesRes.rows.map((r: { tablename: string }) => r.tablename);
+    }
+  );
+
+  for (const tablename of tableNames) {
+    let offset = 0;
+    let part = 0;
+
+    while (true) {
+      const rows = await withPostgresClient(
+        creds,
+        databaseName,
+        async (client) => {
+          const dataRes = await client.query(
+            `SELECT * FROM "${tablename}" LIMIT $1 OFFSET $2`,
+            [ROW_BATCH_SIZE, offset]
+          );
+          return dataRes.rows;
+        }
+      );
+
+      if (rows.length === 0 && part > 0) break;
+
+      part += 1;
+      const body = await jsonToBuffer(
+        {
+          database: databaseName,
+          table: tablename,
+          exportedAt,
+          part,
+          rows,
+        },
         compression
       );
-      const schemaKey = `postgresql/${databaseName}/${baseName}/_schema.${ext}`;
-      const schemaUri = await uploadToS3(
+      const fileStem =
+        part > 1
+          ? `${tablename}_part${String(part).padStart(4, "0")}`
+          : tablename;
+      const key = `postgresql/${databaseName}/${baseName}/${fileStem}.${ext}`;
+      const s3Uri = await uploadToS3(
         s3Creds,
-        schemaKey,
-        schemaBody,
+        key,
+        body,
         backupContentType(compression)
       );
       uploads.push({
-        table: "_schema",
-        s3Uri: schemaUri,
-        sizeBytes: schemaBody.byteLength,
+        table: tablename,
+        part,
+        s3Uri,
+        sizeBytes: body.byteLength,
+        rowCount: rows.length,
       });
+
+      if (rows.length < ROW_BATCH_SIZE) break;
+      offset += rows.length;
     }
-
-    const tablesRes = await client.query(
-      `SELECT tablename FROM pg_tables WHERE schemaname = 'public'`
-    );
-
-    for (const { tablename } of tablesRes.rows) {
-      let offset = 0;
-      let part = 0;
-
-      while (true) {
-        const dataRes = await client.query(
-          `SELECT * FROM "${tablename}" LIMIT $1 OFFSET $2`,
-          [ROW_BATCH_SIZE, offset]
-        );
-
-        if (dataRes.rows.length === 0 && part > 0) break;
-
-        part += 1;
-        const body = await jsonToBuffer(
-          {
-            database: databaseName,
-            table: tablename,
-            exportedAt,
-            part,
-            rows: dataRes.rows,
-          },
-          compression
-        );
-        const fileStem =
-          part > 1
-            ? `${tablename}_part${String(part).padStart(4, "0")}`
-            : tablename;
-        const key = `postgresql/${databaseName}/${baseName}/${fileStem}.${ext}`;
-        const s3Uri = await uploadToS3(
-          s3Creds,
-          key,
-          body,
-          backupContentType(compression)
-        );
-        uploads.push({
-          table: tablename,
-          part,
-          s3Uri,
-          sizeBytes: body.byteLength,
-          rowCount: dataRes.rows.length,
-        });
-
-        if (dataRes.rows.length < ROW_BATCH_SIZE) break;
-        offset += dataRes.rows.length;
-      }
-    }
-
-    return {
-      database: databaseName,
-      tables: tablesRes.rows.length,
-      prefix: `postgresql/${databaseName}/${baseName}/`,
-      uploads,
-      compression,
-    };
-  } finally {
-    await client.end();
   }
+
+  return {
+    database: databaseName,
+    tables: tableNames.length,
+    prefix: `postgresql/${databaseName}/${baseName}/`,
+    uploads,
+    compression,
+  };
 }
 
 export async function backupPostgreSQL(
@@ -346,14 +345,6 @@ export async function backupPostgreSQL(
   options: IDataObject,
   s3Creds: IDataObject
 ): Promise<IDataObject> {
-  const { Client } = await import("pg");
-
-  const sslMap: Record<string, boolean | object> = {
-    disable: false,
-    allow: true,
-    require: { rejectUnauthorized: false },
-  };
-
   const scope = (options.databaseScope as string) || "all";
   const specificDb = requireSpecificName(
     scope,
@@ -361,35 +352,24 @@ export async function backupPostgreSQL(
     "Database name"
   );
 
-  const baseConfig = {
-    host: creds.host as string,
-    port: creds.port as number,
-    user: creds.user as string,
-    password: creds.password as string,
-    ssl: sslMap[(creds.ssl as string) || "disable"] as any,
-  };
-
   let databaseNames: string[];
 
   if (scope === "specific") {
     databaseNames = [specificDb];
   } else {
-    const listClient = new Client({
-      ...baseConfig,
-      database: creds.database as string,
-    });
-    await listClient.connect();
-    try {
-      const res = await listClient.query(`
-        SELECT datname FROM pg_database
-        WHERE datallowconn = true AND datistemplate = false
-        AND datname NOT IN ('template0', 'template1')
-        ORDER BY datname
-      `);
-      databaseNames = res.rows.map((r: { datname: string }) => r.datname);
-    } finally {
-      await listClient.end();
-    }
+    databaseNames = await withPostgresClient(
+      creds,
+      creds.database as string,
+      async (client) => {
+        const res = await client.query(`
+          SELECT datname FROM pg_database
+          WHERE datallowconn = true AND datistemplate = false
+          AND datname NOT IN ('template0', 'template1')
+          ORDER BY datname
+        `);
+        return res.rows.map((r: { datname: string }) => r.datname);
+      }
+    );
   }
 
   const backups: IDataObject[] = [];
